@@ -1,0 +1,14 @@
+# Organiser-only artifacts. Never ship either of these to a candidate.
+candidates/
+.verify-overlay/
+
+node_modules/
+*.db
+*.db-wal
+*.db-shm
+dist/
+test-results/
+playwright-report/
+
+.DS_Store
+.idea/
