@@ -11,28 +11,35 @@ gives nothing away.
 
 ---
 
-<!-- EXAMPLE — delete this block, keep the shape.
+## 2026-09-26 · Phase 0 — orientation
 
-## 2026-03-04 · Phase 0 — orientation
+Expected the stub to fail only the "accepted" rows. It throws, so `null token` and `alg: none`
+should already count as rejections.
+Observed: `node scripts/check-jwt.js` — 0 passed, 43 failed. Every row, including the rejection
+cases, is `Error: TODO: server/auth.js — verifyAccessToken() is yours to write (AUTH-DATA-MODEL.md §10).`
+wanted `401 UNAUTHENTICATED`. The harness (`scripts/check-jwt.js` `outcome`) only treats an
+`HttpError` as a shaped rejection. A bare throw is not a 401.
+Note: `assertFresh` is already implemented and is the only `TOKEN_STALE` path. The verifier has
+no database handle, so it cannot see `memberships.perm_version`.
 
-Expected the unknown-permission test to fail on my validation code.
-Observed: it passed, with foreign_keys ON, and *also* passed with the pragma removed — so the
-check was never running, and the "pass" was the schema loading fine while enforcing nothing.
-Changed: moved `foreign_keys = ON` to connection open and re-ran; now it raises
-`FOREIGN KEY constraint failed` as the README said it would.
-Note: this is the failure mode where a passing test is worse than a failing one.
+## 2026-09-26 · Phase 1 — token verification
 
--->
+Expected `timingSafeEqual` to return false when the signature is shorter than the digest.
+Observed: calling it on an 8-character signature throws `RangeError: Input buffers must have the
+same byte length`. Separately, `Buffer.from('!!!not-base64!!!', 'base64url')` does not throw; it
+returns a 7-byte buffer. And `NaN <= now` is false, so `typeof exp === 'number' && exp <= now`
+would accept `exp: NaN`.
+Changed: length-check, then `timingSafeEqual`. HMAC is always SHA-256; `header.alg` is an
+allow-list (`HS256` and `typ === 'JWT'`), never a switch. `exp` must be a finite number and
+`exp <= now` is expired. Header and payload must be JSON objects, not null or arrays.
+Result: `node scripts/check-jwt.js` — 43 passed, 0 failed. Extra probe: `exp: NaN`, `exp:
+Infinity`, a `null` header, and an array payload all return `401 UNAUTHENTICATED`. A future
+fractional `exp` is accepted; it is a finite number.
 
-## Phase 0 — orientation
+## Phase 2 — caller context and the resolution engine
 
-_Installed, reset the database, read the documents, ran the suites against the untouched skeleton.
-What did the starting line actually look like, and which failure surprised you?_
-
-## Phase 1 — token verification
-
-_What did you expect each failure mode to look like before you ran it? Which one behaved
-differently from your expectation, and what did that tell you?_
+_This is where most people's first model is wrong. Write down the model you started with, the
+observation that broke it, and the model you moved to. Be specific about the observation._
 
 ## Phase 2 — caller context and the resolution engine
 

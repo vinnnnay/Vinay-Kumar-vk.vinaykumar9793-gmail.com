@@ -47,36 +47,68 @@ export function issueAccessToken({ userId, orgId, role, permVersion }, secret) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// TODO — yours to implement.
-//
 // Verify an access token and return its claims, or throw `unauthenticated(...)`.
-// The signing half above is done for you; the verifying half is the exercise.
+// Structural checks only — permission-version staleness is `assertFresh`, which
+// needs the membership row. `node scripts/check-jwt.js` is the public suite.
 //
-// It must reject ALL of the following, each with a 401 UNAUTHENTICATED:
-//
-//   1. a token that is not three dot-separated segments
-//   2. a header or payload that is not valid base64url-encoded JSON
-//   3. a header whose `alg` is anything other than 'HS256', or whose `typ` is not 'JWT'
-//      -- read the header, do NOT trust it. This is the `alg: none` and
-//         algorithm-substitution defence. The constants ALG, ISS and AUD are above.
-//   4. a signature that does not match, compared in constant time
-//   5. an `exp` that is missing, not a number, or <= now (note: <=, not <)
-//   6. an `iss` or `aud` that is not ours
-//   7. a missing or empty `jti`
-//
-// On success, return the decoded claims object.
-//
-// AUTH-DATA-MODEL.md §10 lists the failure modes; §2 defines the claim set.
-// `node scripts/check-jwt.js` is the public test suite for this function.
-// ---------------------------------------------------------------------------
+// A header or payload that parses as JSON but is not an object (null, array,
+// scalar) must still be a 401. Property access on those values throws, and that
+// throw would leave this function as a 500.
+function isJsonObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function verifyAccessToken(token, secret) {
-  // YOURS TO WRITE. Every failure mode listed above must be a 401 UNAUTHENTICATED.
-  // `node scripts/check-jwt.js` is the public suite for this function.
-  throw Object.assign(
-    new Error('TODO: server/auth.js — verifyAccessToken() is yours to write (AUTH-DATA-MODEL.md §10).'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+  // Every rejection is `unauthenticated(...)` so the suite (and the pipeline) see
+  // 401 UNAUTHENTICATED rather than a raw TypeError/RangeError.
+  if (typeof token !== 'string') throw unauthenticated('malformed token');
+
+  const parts = token.split('.');
+  if (parts.length !== 3) throw unauthenticated('malformed token');
+  const [h, p, s] = parts;
+
+  let header;
+  try {
+    header = JSON.parse(unb64(h).toString('utf8'));
+  } catch {
+    throw unauthenticated('malformed token header');
+  }
+  // Read the header, then ignore its algorithm. The HMAC below is always SHA-256.
+  // Dispatching on `header.alg` is how `alg: none` and HS512/RS256 substitution get in.
+  if (!isJsonObject(header) || header.alg !== ALG || header.typ !== 'JWT') {
+    throw unauthenticated('unsupported token algorithm');
+  }
+
+  const expected = createHmac('sha256', secret).update(`${h}.${p}`).digest();
+  const actual = unb64(s);
+  // timingSafeEqual throws when the lengths differ. A truncated or empty signature
+  // must be a 401, not that throw leaking out as a 500.
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw unauthenticated('bad signature');
+  }
+
+  let claims;
+  try {
+    claims = JSON.parse(unb64(p).toString('utf8'));
+  } catch {
+    throw unauthenticated('malformed token payload');
+  }
+  if (!isJsonObject(claims)) throw unauthenticated('malformed token payload');
+
+  // Half-open, matching D7: exp == now is already expired. A numeric string is not
+  // a number — JSON would have kept a real number as a number.
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp <= now) {
+    throw unauthenticated('token expired');
+  }
+  if (claims.iss !== ISS || claims.aud !== AUD) {
+    throw unauthenticated('bad token issuer or audience');
+  }
+  if (typeof claims.jti !== 'string' || claims.jti.length === 0) {
+    throw unauthenticated('token has no jti');
+  }
+
+  return claims;
 }
 
 
