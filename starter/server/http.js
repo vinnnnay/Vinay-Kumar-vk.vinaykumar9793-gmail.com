@@ -24,6 +24,7 @@ export const conflict = (msg, code = 'CONFLICT') => new HttpError(409, code, msg
 export const lastOwner = () => new HttpError(409, 'LAST_OWNER', 'the org must always have at least one owner');
 export const deviceBusy = (msg = 'device already has an exclusive session') => new HttpError(409, 'DEVICE_BUSY', msg);
 export const gone = (msg = 'invite is no longer valid') => new HttpError(410, 'GONE', msg);
+export const grantExpired = (msg = 'expiresAt must be in the future') => new HttpError(400, 'GRANT_EXPIRED', msg, 'expired_grant');
 
 // Normalise a client-supplied timestamp to the canonical form the schema stores and
 // compares: ISO-8601 UTC ending in 'Z'.

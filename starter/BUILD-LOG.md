@@ -79,8 +79,57 @@ context.js does not duplicate the status check.
 
 ## Phase 3 — orgs, members, invites
 
-_Anything you had to work out that no document states. Invite lifecycle states are a common
-source of this._
+Wrote `assertCanModify` straight from PERMISSIONS.md §6's table: caller's rank must be
+strictly greater than the target's, full stop. Then ran `check-api.js`'s D8 block and
+hit line 150 -- `PATCH /orgs/org_acme/members/usr_acme_owner` by Dana (owner),
+demoting another owner to viewer, expected `200`. Strict-greater-than rejects this: an
+owner has equal rank to an owner. But Acme's own fixture has two owners
+(`usr_dana`, `usr_acme_owner`), and there is no other endpoint that could ever demote
+one of them if owner-vs-owner were refused -- the org would be stuck with two owners
+forever. Added one exception: `callerRole === 'owner' && targetRole === 'owner'`
+returns immediately, before the rank comparison. `assertNotLastOwner` is the guard that
+makes this safe (an owner demoting the *last* owner, including themselves, still hits
+`LAST_OWNER`). `node scripts/check-api.js` -- 66/66, including both the "demoting a
+non-last owner is allowed" and "admin cannot confer owner" rows, so this didn't loosen
+the admin-to-admin case the doc's own example names.
+
+Expected the partial unique index `one_exclusive_session_per_device` to surface with a
+message naming the index, so I could match on `'one_exclusive_session_per_device'` to
+tell a real conflict apart from an unrelated constraint failure. Observed:
+better-sqlite3 throws `SqliteError: UNIQUE constraint failed: sessions.device_id` --
+the column, not the index name -- so my first `DEVICE_BUSY` translation
+(`server/routes/sessions.js`) never matched and a legitimate second `control` request
+came back `500 INTERNAL` instead of `409 DEVICE_BUSY`. Caught by
+`check-api.js`'s "2nd control on same device -> 409" row, not by guessing. Changed the
+match to `err.code === 'SQLITE_CONSTRAINT_UNIQUE' && err.message.includes('sessions.device_id')`.
+
+`refresh_tokens` has no `org_id` column (by design -- D12, it's an identity credential,
+not an authorization one), which means `POST /auth/refresh` has no stored org to
+reissue an access token for. The document doesn't say what a bare refresh (no `orgId`
+in the body) should scope to. Settled it the same way login settles "no org given
+yet": earliest-joined active membership. Recorded as an open decision, not a silent
+default -- see DECISIONS.md.
+
+`check-api.js` runs everything end to end -- auth, orgs, members, invites, devices,
+grants, sessions, audit -- against real HTTP, so getting any of it green meant getting
+most of it built first. Went broad across Phases 3-6 in one pass rather than in
+strict phase order; `node scripts/check-api.js` -- 66/66, `check-permissions.js` --
+35/35, `check-jwt.js` -- 43/43, `check-personalisation.js` -- 18/18 confirm none of it
+regressed the earlier work or leaked the documented 19-permission matrix into a place
+that would fail under a different nonce.
+
+## Phase 4 — devices and grants
+
+Covered by the Phase 3 entries above -- devices, grants, and their route-level
+validation landed in the same pass as orgs/members/invites, verified together against
+`check-api.js`.
+
+## Phase 5 — sessions
+
+The compound check (`assertCanStartSession`) was already built and unit-tested in
+Phase 2; this phase was wiring it to a real device lookup, `snapshotAuthority`, and the
+database's own exclusivity index rather than a check-then-insert. See the
+`SQLITE_CONSTRAINT_UNIQUE` entry above for the one real surprise.
 
 ## Phase 4 — devices and grants
 

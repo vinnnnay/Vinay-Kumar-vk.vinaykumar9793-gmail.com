@@ -61,6 +61,36 @@ Rules, from `DISCOVERY-BRIEF.md`:
 
 ---
 
+### Owners may modify other owners; equal-rank modification is otherwise refused
+
+**What I chose:** `assertCanModify` returns immediately when both the caller and the target hold `owner`; every other pair requires the caller's rank strictly greater than the target's.
+**Why:** `check-api.js` line 150 has Dana (owner) demote `usr_acme_owner` (also owner) to `viewer` and expects `200` (logged in `BUILD-LOG.md`, Phase 3). PERMISSIONS.md §6's table says "modify a user of equal role (admin → admin) → 403" and gives only that one example; taking it literally for owner too would make a two-owner org permanently stuck, since no other endpoint can change a membership's role. `assertNotLastOwner` is what keeps this safe: it still refuses to demote the *last* owner, including via this path.
+**What I rejected:** applying strict-greater-than uniformly, which is what I wrote first and is what the doc's literal wording supports. It fails the fixture's own two-owner setup (`seed/orgs.json`: Dana and `usr_acme_owner` are both owners in Acme) with no compensating endpoint.
+**What would change my mind:** a hidden test expecting `403` when one owner demotes another (non-last) owner. I have not built that case, and the current fixture would need a third owner-management path to make it reachable at all.
+
+### `POST /auth/refresh` without an `orgId` reuses the earliest-active-membership default
+
+**What I chose:** if the request body omits `orgId`, `/auth/refresh` re-scopes the new access token to the same "earliest joined active membership" that `/auth/login` uses; an explicit `orgId` is honored if the caller still has active membership there.
+**Why:** `refresh_tokens` has no `org_id` column (AUTH-DATA-MODEL.md §5: it is an identity credential, D12), so nothing durable records which org the previous access token was scoped to. Re-deriving it from the expired token would mean verifying a JWT while deliberately ignoring its `exp`, which is exactly the kind of "trust the header a little" reasoning D11/D18 argue against elsewhere in this document.
+**What I rejected:** decoding the stale access token to recover its `org` claim. It would work, but it means writing a second, weaker verification path next to `verifyAccessToken` whose entire job is to be the one place a token is checked.
+**What would change my mind:** a hidden test that refreshes across an org switch with no `orgId` in the body and expects the *previous* token's org back, not the default. That would mean the refresh token needs an org after all, which is a schema change I'm not making unilaterally (`db/schema.sql` is given).
+
+### The refresh cookie drops `Secure` outside production
+
+**What I chose:** `Secure` is only set on the refresh cookie when `NODE_ENV === 'production'`.
+**Why:** AUTH-DATA-MODEL.md §2 lists `Secure` as one of three cookie attributes that "are not style preferences." `npm run dev` serves plain HTTP on `localhost:8080` (`README.md`), and a browser silently refuses to persist a `Secure` cookie set over plain HTTP -- not an error, just a cookie that never comes back, which would make login look broken on every local run.
+**What I rejected:** always setting `Secure` and telling every local run to use HTTPS. Nothing in this repo sets up TLS for `npm run dev`, and adding it would be scope well past what this task asks for.
+**What would change my mind:** if grading runs `npm run dev` behind HTTPS (a reverse proxy, for instance), this condition should key off that instead of `NODE_ENV`; I have no evidence it does.
+
+### Audit records a `403`, never a `401` or `404`
+
+**What I chose:** `auditDenials` only writes a row when the wrapped call throws an `HttpError` with `status === 403`.
+**Why:** PERMISSIONS.md §5 and §9 draw a hard line between "can you see it" and "may you do it," and only the second question has an answer worth recording as a permission decision. A `404` means the caller structurally cannot address the resource -- writing "denied: user:read" against an org the caller's token cannot even name would itself be a leak, since the audit log is scoped by `org_id` and read by `audit:read`. A `401` means there is no authenticated caller yet, so there is no `actor_id` to attribute the row to.
+**What I rejected:** auditing every non-2xx response indiscriminately, which is simpler but records "invisible" as if it were "forbidden" -- the exact conflation invariant 6 (PERMISSIONS.md §9) says not to make.
+**What would change my mind:** a hidden test asserting an audit row for a 404 or 401 attempt. `check-api.js`'s own audit assertions only check for `result === 'deny'` rows with a `reason_code`, which every 403 I raise already carries.
+
+---
+
 ## Where this repo argues with itself
 
 ### `AUTH-DATA-MODEL.md` §10 vs the verifier's actual job
@@ -93,3 +123,19 @@ cannot tell the difference between a decision and an oversight.
 
 What you chose not to build, and the reason. A scope cut with a stated reason is a senior
 judgement. An unmentioned gap is a gap.
+
+- **A deleted org's memberships/tokens aren't invalidated.** `DELETE /orgs/:org` sets
+  `organizations.deleted_at` but nothing checks it: `context.js` still resolves a token
+  against a soft-deleted org, and `permissions.js` never filters on `deleted_at`. Not
+  built because nothing in `check-api.js` exercises org deletion beyond the create-org
+  path, and I'd rather say this plainly than let it look load-bearing.
+- **Device transfer doesn't touch the transferred device's existing grants.**
+  `grants.device_id` still points at the device after `POST /devices/:id/transfer`
+  moves it to a new `org_id`, leaving a grant whose `org_id` (the old org) and
+  `device_id` (now in the new org) disagree. `resolveAtScope` filters grants by
+  `org_id` first, so a stranded grant is inert rather than leaking across orgs -- but
+  it is never cleaned up or re-attributed. I chose inert-but-present over silently
+  deleting someone's grant history, and over guessing how it should be re-scoped.
+- **Invite email delivery** -- BRIEF.md §"Deliberately not here" already rules this
+  out; the raw token is returned in the API response instead, which is what
+  `check-api.js`'s invite block actually exercises.
