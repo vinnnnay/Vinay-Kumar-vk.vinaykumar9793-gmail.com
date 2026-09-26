@@ -4,7 +4,7 @@
 
 import { newId, nowIso, bumpPermVersion } from '../db.js';
 import { send, badRequest, notFound, forbidden, grantExpired, normalizeTs } from '../http.js';
-import { assertCan, assertMayGrant, resolve, resolveDevices } from '../permissions.js';
+import { assertCan, assertAllowed, assertMayGrant, resolve, resolveDevices } from '../permissions.js';
 import { endActiveSessions } from '../lifecycle.js';
 import { audit, auditDenials } from '../audit.js';
 
@@ -33,9 +33,9 @@ export function registerDeviceRoutes(router, { db }) {
     const device = deviceRow(db, ctx.orgId, params.id);
     if (!device) throw notFound();
 
-    await auditDenials(db, ctx, { action: 'device.view', targetType: 'device', targetId: params.id }, () => assertCan(db, ctx, 'device:view', params.id));
-
     const { permissions } = resolve(db, { userId: ctx.userId, orgId: ctx.orgId, deviceId: params.id });
+    await auditDenials(db, ctx, { action: 'device.view', targetType: 'device', targetId: params.id }, () => assertAllowed('device:view', permissions));
+
     send(res, 200, { id: device.id, name: device.name, kind: device.kind, online: !!device.online, permissions });
   });
 

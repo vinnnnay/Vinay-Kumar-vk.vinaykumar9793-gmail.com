@@ -107,6 +107,15 @@ Rules, from `DISCOVERY-BRIEF.md`:
 
 ---
 
+### `assertCan` splits into resolve-then-check plus a check-only `assertAllowed`
+
+**What I chose:** `permissions.js` now exports both `assertCan(db, ctx, permission, deviceId)` (resolves, then checks) and `assertAllowed(permission, resolvedPermissions)` (checks an already-resolved set). `GET /orgs/:org/devices/:id` calls `resolve()` once and passes the result to both the permission gate and the response body.
+**Why:** that route previously called `assertCan(db, ctx, 'device:view', params.id)` -- a full `resolve()` -- and then called `resolve()` again for the same `(userId, orgId, deviceId)` to build the response. README.md's Speed section names this exact anti-pattern ("resolving permissions more than once inside one request"). Found by grepping every route for a second `resolve`/`assertCan` against the same scope and checking each hit by hand (logged in `BUILD-LOG.md`, Phase 8).
+**What I rejected:** leaving `assertCan` as the only entry point and having the route reconstruct the response permissions from `assertCan`'s single-permission return value -- `assertCan` returns one permission's `{effect, source, reason}`, not the full catalogue, so that would mean either changing `assertCan`'s return shape (breaking every other caller that only wants the boolean gate) or resolving twice anyway.
+**What would change my mind:** finding another route with the same shape that `assertAllowed` doesn't fit cleanly -- I checked the others by hand and none had it, but I have not audited hidden-tier routes I haven't written.
+
+---
+
 ## Where this repo argues with itself
 
 ### `AUTH-DATA-MODEL.md` §10 vs the verifier's actual job

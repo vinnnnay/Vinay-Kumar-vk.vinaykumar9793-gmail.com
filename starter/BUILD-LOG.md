@@ -173,8 +173,44 @@ places in the given code.
 
 ## Phase 8 — hardening
 
-_What did you measure, what did you fix, and what did you deliberately leave alone? Anything you
-chose not to build belongs here with its reason._
+Measured, not guessed, against README.md's "Speed" section:
+
+- **Query count per device row.** Seeded 200 devices in one org, monkey-patched
+  `db.prepare` to count calls, and ran `resolveDevices` directly: 200 devices, **4**
+  prepared statements, 2.06ms total. Confirms the device-row shape does its job --
+  membership/baseline/grants load once, the per-device loop is pure JS after that.
+- **First screen and first authenticated request.** Against a production build
+  (`npm run build`, `NODE_ENV=production`): static `index.html` 8ms, `POST
+  /auth/login` (password hashing included) 47ms, `GET /orgs/:org/devices` 2ms. All
+  three are the README's "well inside a second" with room to spare.
+
+Went looking for the specific anti-pattern named in the same section --
+"resolving permissions more than once inside one request" -- by grepping every route
+for a second `resolve(`/`assertCan(` against the same (user, org, device) scope.
+Found one real instance: `GET /orgs/:org/devices/:id` called `assertCan(db, ctx,
+'device:view', params.id)` (a full `resolve()` internally) and THEN called
+`resolve()` again to get the permissions object for the response body -- the exact
+double-resolution the doc warns about, on the one route I'd built without noticing
+it. Every other route that calls `resolve()` twice does so for a genuinely different
+subject (the effective-permissions endpoint resolves the caller once and the target
+user once; device transfer resolves the source org and the destination org) --
+checked each one by hand rather than assuming grep innocence.
+
+Fixed by splitting `assertCan` in `permissions.js` into `resolve-then-check` and a
+new `assertAllowed(permission, alreadyResolvedPermissions)` that just checks, so a
+route that needs the full set anyway resolves once and reuses it. `check-api.js`
+66/66 and `check-permissions.js` 35/35 held after the change; manually curled the
+route directly (not in either public suite) to confirm both the allow and the
+explicit-deny case still return the right status and body.
+
+**Left alone, on purpose:** `GET /orgs/:org/devices` still resolves permissions
+twice -- once for the `device:list` gate (`assertCan`), once inside `resolveDevices`
+for the per-device sets. Both loads are the same fixed handful of queries regardless
+of how many devices exist, so it's constant overhead, not the O(n) growth the Speed
+section is actually warning against. Merging them would mean either exposing
+`permissions.js`'s internal `loadCallerState` or teaching `resolveDevices` to accept
+a pre-fetched membership, and I chose not to enlarge that module's surface for a
+cost that doesn't scale with the thing the section cares about.
 
 ## Open threads
 

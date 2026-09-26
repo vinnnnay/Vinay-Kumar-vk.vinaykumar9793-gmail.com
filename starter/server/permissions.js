@@ -156,11 +156,22 @@ export function can(db, ctx, permission, deviceId = null) {
 // other cause -- implicit, not_a_member, invited, removed -- is just "you don't have it".
 const SURFACED_REASON = new Set(['explicit_deny', 'suspended']);
 
-// Throws 403 carrying the reason code, so a refusal is debuggable.
-export function assertCan(db, ctx, permission, deviceId = null) {
-  const result = resolve(db, { userId: ctx.userId, orgId: ctx.orgId, deviceId }).permissions[permission];
+function throwIfDenied(permission, result) {
   if (result.effect === 'allow') return result;
   throw forbidden(`missing ${permission}`, SURFACED_REASON.has(result.reason) ? result.reason : 'missing_permission');
+}
+
+// Throws 403 carrying the reason code, so a refusal is debuggable.
+export function assertCan(db, ctx, permission, deviceId = null) {
+  return throwIfDenied(permission, resolve(db, { userId: ctx.userId, orgId: ctx.orgId, deviceId }).permissions[permission]);
+}
+
+// Same check, against a permission set a caller already resolved -- for a route that
+// also needs the full set in its response body, so it isn't resolved twice in one
+// request (README.md "Speed": "resolving permissions more than once inside one
+// request" is exactly the anti-pattern this avoids).
+export function assertAllowed(permission, resolvedPermissions) {
+  return throwIfDenied(permission, resolvedPermissions[permission]);
 }
 
 // No privilege laundering: you may only grant authority you hold at that scope
