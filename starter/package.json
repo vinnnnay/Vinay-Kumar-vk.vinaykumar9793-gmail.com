@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "node --watch-path=./server --watch server/index.js",
     "build": "vite build",
+    "pretest": "vite build",
     "start": "NODE_ENV=production node server/index.js",
     "db:reset": "rm -f app.db app.db-wal app.db-shm && npm run db:load",
     "db:load": "node scripts/load-db.js",

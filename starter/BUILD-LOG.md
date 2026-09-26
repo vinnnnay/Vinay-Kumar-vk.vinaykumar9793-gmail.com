@@ -147,7 +147,29 @@ _What did you decide counts as an auditable event, and what pushed you to that l
 
 ## Phase 7 — the console
 
-_Where did the server's answer and your instinct disagree about what should be on screen?_
+Built the device row's session-start buttons expecting to gate each one on BOTH
+`session:start` and its mode permission -- that is the literal rule in
+PERMISSIONS.md §9, and it's what `assertCanStartSession` on the server actually
+enforces. First `npx playwright test` run: 23/25 passed, and the two failures were
+both the same shape -- `dev_globex_desk_01`'s `device:control` button missing for
+Dana (viewer in Globex, holds `device:control` there only through
+`grt_dana_control_one_device`, which grants `device:control` alone, not
+`session:start`). The compound rule is real, but it's a rule about what
+`POST /sessions` allows, not about what a button's presence means. Rereading
+README.md's console contract: "every card, every entry, and **the permission** that
+governs it" -- singular, one element to one resolved permission. Removed the
+`session:start` half of the presence check; `data-permission="device:control"` now
+keys off `permissions['device:control'].effect` alone, same as every other element in
+the console. A click on a button that's showing can still 403 if `session:start`
+turns out to be the missing half -- that's surfaced as an inline error, not hidden by
+making the button disappear for a reason the button doesn't name.
+`npx playwright test` -- 25/25 after the fix.
+
+Also found (while getting the production build to serve at all): `server/index.js`'s
+`DIST` constant had the exact same `.pathname`-on-a-`file://`-URL bug as
+`scripts/load-db.js` (Phase 2) -- `curl` against a built `dist/` returned `404` for
+every asset until it was changed to `fileURLToPath`. Same fix, same root cause, two
+places in the given code.
 
 ## Phase 8 — hardening
 

@@ -91,6 +91,22 @@ Rules, from `DISCOVERY-BRIEF.md`:
 
 ---
 
+### A device-row button's presence is keyed to ONE permission, not the compound session-start check
+
+**What I chose:** in `DevicesView.jsx`, a mode button (`data-permission="device:control"` etc.) renders whenever `permissions[modePermission].effect === 'allow'`, full stop -- not also requiring `permissions['session:start']`.
+**Why:** `tests/ui.spec.js`'s "a device-scoped grant surfaces exactly one control" failed against my first version, which required both. Dana holds `device:control` on `dev_globex_desk_01` only through `grt_dana_control_one_device`, whose `permissions` array is `["device:control"]` -- no `session:start`. The test still expects the Control button to render. README.md's console contract says presence is keyed to "**the** permission" governing an element, singular; the two-permission compound rule in PERMISSIONS.md §9 is a rule about what `POST /sessions` allows, and I'd conflated it with a rule about what renders.
+**What I rejected:** the compound check, which is what I built first and is literally correct for *starting a session* -- it just isn't the presence rule for *showing the button*. A click on a showing button can still legitimately 403 with `missing_permission` for `session:start`; the UI surfaces that as an inline error rather than pre-hiding it.
+**What would change my mind:** a hidden UI test asserting a mode button is absent when `session:start` is denied but the mode permission is allowed. I have not built or seen that case, and the one fixture case that could show it (Dana in Globex) asserts the opposite.
+
+### `server/index.js`'s static-file path had the same Windows bug as `load-db.js`
+
+**What I chose:** changed `DIST` from `new URL('../dist/', import.meta.url).pathname` to `fileURLToPath(new URL('../dist/', import.meta.url))`.
+**Why:** identical failure mode to the Phase 2 `load-db.js` fix (`BUILD-LOG.md`): `.pathname` on Windows is `/D:/...`, and `path.join(DIST, rel)` built from that never resolved to a real file, so every static asset in production mode 404'd. Caught with a direct `curl` against a built `dist/` before ever running Playwright against it, since `playwright.config.js` boots the server with `NODE_ENV=production`.
+**What I rejected:** nothing to reject here -- there was no other candidate fix once the cause was the same as before.
+**What would change my mind:** n/a; verified directly (404 before, 200 after, same build).
+
+---
+
 ## Where this repo argues with itself
 
 ### `AUTH-DATA-MODEL.md` §10 vs the verifier's actual job
