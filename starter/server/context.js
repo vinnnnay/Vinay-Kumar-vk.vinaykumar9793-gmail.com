@@ -1,29 +1,42 @@
 // Per-request context: turn a bearer token into an authenticated caller.
 //
-// YOURS TO WRITE. This file ships as a stub so the server boots and every
-// authenticated request fails loudly instead of appearing to work.
-//
-// What it has to do (BRIEF.md §3, PERMISSIONS.md §6):
-//   - read the bearer token, verify it with verifyAccessToken() from ./auth.js
-//   - look the membership up and refuse a token whose org or membership is gone
-//   - THE TOKEN'S org CLAIM IS THE ONLY ORG THE CALLER MAY ADDRESS. A request that
-//     names a different org is INVISIBLE — 404, never 403. Isolation is structural:
-//     the caller cannot name another org, rather than being filtered afterwards.
-//   - check freshness against memberships.perm_version (AUTH-DATA-MODEL.md §3), so a
-//     role or grant change takes effect on the NEXT request, not at token expiry
-//   - throw through the one error path in ./http.js
-//
-// authenticate(db, secret) returns (req, params) => caller, where caller carries at
-// least { userId, orgId, role, membership, claims }.
+// Structural org isolation lives here, not in individual routes: the token's `org`
+// claim is the only org this caller may address. A request naming a different org in
+// the path is refused before the database is even asked whether that org exists, so
+// the response for "wrong org" and "no such org" are identical -- 404 either way.
 
-const todo = () =>
-  Object.assign(
-    new Error('TODO: server/context.js — authenticate() is yours to write (BRIEF.md §3).'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+import { verifyAccessToken, assertFresh } from './auth.js';
+import { unauthenticated, notFound } from './http.js';
 
 export function authenticate(db, secret) {
   return function buildContext(req, params) {
-    throw todo();
+    const header = req.headers['authorization'] ?? '';
+    const match = /^Bearer (.+)$/.exec(header);
+    if (!match) throw unauthenticated('missing bearer token');
+
+    const claims = verifyAccessToken(match[1], secret);
+
+    // The caller cannot even ask about another org: not filtered after the fact,
+    // refused before the lookup. See AUTH-DATA-MODEL.md §2 (D18) and §10.
+    if (params?.org && params.org !== claims.org) throw notFound();
+
+    const membership = db
+      .prepare('SELECT * FROM memberships WHERE org_id = ? AND user_id = ?')
+      .get(claims.org, claims.sub);
+
+    // A removed membership no longer exists as far as auth is concerned (D15: users
+    // are never deleted, but the membership row's status is). AUTH-DATA-MODEL.md §10:
+    // removed -> 401. Suspended is deliberately NOT rejected here -- the caller is
+    // still authenticated, and permissions.js resolves an empty set for them, which
+    // is what turns every subsequent request into a 403 rather than a 401.
+    if (!membership || membership.status === 'removed') {
+      throw unauthenticated('membership no longer exists');
+    }
+
+    // Compares with !==, not <: a pv from the future is as suspect as a stale one
+    // (AUTH-DATA-MODEL.md §3). Throws 401 TOKEN_STALE.
+    assertFresh(claims, membership);
+
+    return { userId: claims.sub, orgId: claims.org, role: membership.role, membership, claims };
   };
 }

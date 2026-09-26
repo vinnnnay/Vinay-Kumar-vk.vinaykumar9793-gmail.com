@@ -38,6 +38,29 @@ Rules, from `DISCOVERY-BRIEF.md`:
 
 ---
 
+### Org-level device-permission queries union across every device
+
+**What I chose:** `resolve(db, { deviceId: null })` for a `resource: 'device'` permission calls `resolveAtScope` once per device in the org and returns the first `allow`, falling back to the first `deny` (`resolveDeviceScopedUnion` in `server/permissions.js`).
+**Why:** `seed/orgs.json`'s `grt_dana_control_one_device` gives Dana (`viewer` in Globex, no `device:control` in the baseline) an `allow` on `dev_globex_desk_01` only. A naive org-level check — baseline plus org-wide grants, ignoring device-scoped ones — answers "can Dana control anything in Globex?" with `deny`, which is wrong; she can, on that one device. PERMISSIONS.md §3 says the org-level view is "the union across all devices in the org," and this is the only reading of that sentence that makes the Globex fixture's own stated point (D6) true at the org level, not just the device level.
+**What I rejected:** treating `deviceId: null` as "org-wide grants only, no per-device grants." That's simpler and is what I wrote first, but it makes the nav-gating question answer deny for a user who can clearly act on at least one device, and it makes the org-level and device-level answers permanently agree, which the union language wouldn't need to say if that were the intended behavior.
+**What would change my mind:** a hidden test asserting that an org-level device-permission query ignores device-scoped grants entirely, or a test where an org-wide deny plus a device-scoped allow resolves to org-level allow — that would mean D1 is meant to dominate the union, not just the per-device answer, and I have not built that case.
+
+### `scripts/load-db.js` needed a one-line Windows fix
+
+**What I chose:** changed `here = (p) => new URL(p, import.meta.url).pathname` to return the `URL` object itself, not its `.pathname`.
+**Why:** on Windows, a `file://` URL's `.pathname` is `/D:/rhino/...` — a leading slash before the drive letter — which is not a path `fs.readFileSync` resolves correctly; it produced `ENOENT` against `D:\D:\rhino\...\db\schema.sql` (logged in `BUILD-LOG.md`, Phase 2). `check-permissions.js:10-11` and `check-personalisation.js:27-28` pass the `URL` object directly and both work, which is how I found the fix rather than guessing at one.
+**What I rejected:** leaving it and only running the app under WSL/a POSIX shell. That papers over a real bug for the grader's environment, not just mine, and the fix is smaller than the workaround.
+**What would change my mind:** if the grading harness never runs `npm run db:reset` directly on Windows (only inside a container), this fix is moot but harmless — it's a strict subset of what the URL-object form already does elsewhere in this repo.
+
+### `context.js` lets a suspended caller through; only `removed` is a 401
+
+**What I chose:** `authenticate()` throws `unauthenticated()` for a missing membership or `status === 'removed'`, and returns a caller for every other status, including `suspended`.
+**Why:** AUTH-DATA-MODEL.md §10 states the two outcomes explicitly and differently: suspended → `403` with an empty permission set, removed → `401`. `permissions.js`'s `resolve()` already returns `denyAll(catalogue, 'suspended')` for a suspended membership (`server/permissions.js`, `inactiveReason`), so letting the request through and having `assertCan` reject it as `403 FORBIDDEN reason:"suspended"` satisfies §10 without a second status check living outside the resolution engine.
+**What I rejected:** rejecting `suspended` in `context.js` with 401, which was my first instinct because "not active" reads like "not authenticated." It fails the documented split and it would have been a second place — outside `permissions.js` — deciding an authorization outcome.
+**What would change my mind:** a test hitting a suspended user's request and expecting `401` rather than `403` at any endpoint.
+
+---
+
 ## Where this repo argues with itself
 
 ### `AUTH-DATA-MODEL.md` §10 vs the verifier's actual job

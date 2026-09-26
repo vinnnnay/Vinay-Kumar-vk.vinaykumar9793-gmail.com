@@ -38,13 +38,44 @@ fractional `exp` is accepted; it is a finite number.
 
 ## Phase 2 — caller context and the resolution engine
 
-_This is where most people's first model is wrong. Write down the model you started with, the
-observation that broke it, and the model you moved to. Be specific about the observation._
+Before writing `resolve()`, ran `npm run db:reset` for the first time and it threw
+`ENOENT: no such file or directory, open 'D:\D:\rhino\...\db\schema.sql'` from
+`scripts/load-db.js`. A doubled drive letter. `load-db.js:10` does
+`new URL(p, import.meta.url).pathname`, and `.pathname` on a `file://` URL is
+`/D:/rhino/...` on Windows — a leading slash in front of the drive letter, which
+`readFileSync` does not resolve as a real path. Every other script here
+(`check-permissions.js:10-11`, `check-personalisation.js:27-28`, `personalise.js:213`)
+passes the `URL` object straight to `readFileSync` instead of extracting `.pathname`,
+and none of them have this bug. Changed `load-db.js` to do the same. Verified: `npm run
+db:reset` now seeds `app.db` and prints the fixture summary. This is a bug in a "given"
+file, on this platform only — recorded here rather than silently patched, per the
+write-up rules on arguing with the documents instead of quietly working around them.
 
-## Phase 2 — caller context and the resolution engine
+Expected the org-level (`deviceId: null`) query for a device permission to just be "does
+the role baseline contain it, plus any org-wide grant" — i.e. the same code path as a
+device-level query with `deviceId` fixed to null. Re-reading PERMISSIONS.md §3 ("org-level
+... the union across all devices in the org") and the Globex grant
+(`grt_dana_control_one_device` in `seed/orgs.json`: Dana is a `viewer` in Globex, denied
+`device:control` by baseline everywhere, but explicitly allowed on
+`dev_globex_desk_01`) made the first model visibly wrong: under it, the org-level
+question "can Dana control anything in Globex?" would answer deny, when the true answer
+is "yes, one device." Moved to computing the per-device answer for every device in the
+org and OR-ing them (`resolveDeviceScopedUnion` in `server/permissions.js`), returning on
+the first `allow`. D1's deny precedence is per-scope, not global, so this doesn't
+conflict with it: an org-wide deny still makes every device resolve to deny (the union
+is deny too), but a device-scoped deny on device A must not suppress an allow on device
+B. `node scripts/check-permissions.js` — 35 passed, 0 failed, including the existing
+device-scoped and org-wide-deny vectors, so this didn't regress D1.
 
-_This is where most people's first model is wrong. Write down the model you started with, the
-observation that broke it, and the model you moved to. Be specific about the observation._
+`context.js` initially rejected any non-`active` membership status with 401. Rereading
+AUTH-DATA-MODEL.md §10 ("a token for a suspended membership → `403` with an empty
+permission set; for a `removed` membership → `401`") caught this before it shipped:
+suspended has to reach the permission check and fail there, not be turned away at the
+door. Split it: `removed` (and a missing row) throw `unauthenticated()` in
+`context.js`; `suspended` is left to flow through, because `permissions.js`'s
+`resolve()` already returns a full deny-all set with `reason: "suspended"` for it, and
+`assertCan` turns that into a `403` naturally. One engine still decides allow/deny —
+context.js does not duplicate the status check.
 
 ## Phase 3 — orgs, members, invites
 

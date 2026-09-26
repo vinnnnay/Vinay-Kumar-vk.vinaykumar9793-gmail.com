@@ -7,7 +7,10 @@ import { hashPassword } from '../server/auth.js';
 import { readNonce, buildOverlay, applyOverlay, describeOverlay } from './personalise.js';
 
 const DB_FILE = process.env.DATABASE_FILE ?? 'app.db';
-const here = (p) => new URL(p, import.meta.url).pathname;
+// `.pathname` on a file:// URL is `/D:/...` on Windows, which Node's fs functions do
+// not resolve as a path (see BUILD-LOG.md). Passing the URL itself, as every other
+// script here already does, is the cross-platform form.
+const here = (p) => new URL(p, import.meta.url);
 
 for (const suffix of ['', '-wal', '-shm']) {
   if (existsSync(DB_FILE + suffix)) rmSync(DB_FILE + suffix);
